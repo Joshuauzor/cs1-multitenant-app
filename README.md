@@ -1,155 +1,158 @@
 # CaseForm — Multi-tenant incident reports
 
-A React + TypeScript frontend for a multi-tenant workspace. Users sign in or register against a tenant, then create and view incident reports on a dashboard.
+React + TypeScript frontend for the [accident-scene-api](https://github.com/) NestJS backend. Users register or sign in, then create and view tenant-scoped incident reports via a two-step form.
 
 ## Features
 
-- **Multi-tenant auth** - Login and register with email, password, and tenant selection (Acme Corp, Globex Ltd, Initech).
-- **Session persistence** — Auth token and profile stored in `localStorage`; session survives page refresh.
-- **Incident dashboard** — Table of reports scoped to the signed-in tenant.
-- **Multi-step report form** — Two-step modal: contact/location details, then intervention type.
+- **Multi-tenant auth** — Register with `tenant_slug` + email/password; login with email/password only.
+- **Tenant lookup** — Public `GET /tenants/:slug` validates workspace before registration.
+- **Session persistence** — `access_token` and user profile in `localStorage`.
+- **Incident dashboard** — Tenant-scoped report list (agents see own reports; admins see all in tenant).
+- **Two-step report flow** — `POST /reports` (step 1) then `PATCH /reports/:id/step-2` (intervention type).
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+ (20+ recommended)
-- npm (comes with Node.js)
-- A backend API listening on **port 4000** (or another URL you configure — see [Environment variables](#environment-variables))
+- Node.js 18+ (20+ recommended)
+- npm
+- Backend running at `http://localhost:3000` — see `/Users/joshuauzor/APIs/accident-scene-api`
+
+### Backend setup
+
+```bash
+cd /Users/joshuauzor/APIs/accident-scene-api
+npm install
+npm run migrate:run
+npm run seed:run
+npm run start:dev
+```
+
+Seed data: tenant slug `default`, admin `admin@example.com`.
 
 ## Quick start
 
-### 1. Install dependencies
-
 ```bash
 npm install
-```
-
-### 2. Configure environment (optional for local dev)
-
-Create a `.env` file in the project root (see [Environment variables](#environment-variables)).
-
-For local development with the default Vite proxy, you can leave `VITE_API_URL` unset.
-
-### 3. Start the backend
-
-Ensure your API server is running on `http://localhost:4000` (or update the proxy in `vite.config.ts`).
-
-### 4. Run the frontend
-
-```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:5173](http://localhost:5173).
+
+Vite proxies `/api` → `http://localhost:3000`, so leave `VITE_API_URL` empty for local dev.
 
 ## Environment variables
 
-Vite only exposes variables prefixed with `VITE_` to the client.
-
-Create `.env` at the project root (not under `src/`):
+Create `.env` at the project root:
 
 ```env
-# Base URL for API requests. Leave empty in dev to use same-origin + Vite proxy.
+# Leave empty in dev (uses Vite proxy). Set for production builds.
 VITE_API_URL=
 ```
 
-| Variable        | Required | Description |
-|-----------------|----------|-------------|
-| `VITE_API_URL`  | No       | API origin (e.g. `http://localhost:4000`). If empty, requests use relative paths like `/api/forms`. |
+| Variable       | Required | Description |
+|----------------|----------|-------------|
+| `VITE_API_URL` | No       | API origin (e.g. `http://localhost:3000`). Empty = same-origin `/api/v1/...` |
 
-**Where values vs types live**
-
-- **Values** → `.env` (gitignored). Copy from a teammate or use the example above.
-- **Types** → `src/vite-env.d.ts` (TypeScript only; does not store secrets).
-
-Restart the dev server after changing `.env`.
-
-### Local dev without `VITE_API_URL`
-
-`vite.config.ts` proxies `/api` and `/auth` to `http://localhost:4000`. With an empty `VITE_API_URL`, the app calls `/auth/login`, `/api/forms`, etc. on port 3000 and Vite forwards them to the backend.
-
-### Production / explicit API URL
-
-Set the full API origin:
-
-```env
-VITE_API_URL=https://api.example.com
-```
+Restart `npm run dev` after changing `.env`.
 
 ## npm scripts
 
-| Command           | Description                                      |
-|-------------------|--------------------------------------------------|
-| `npm run dev`     | Start Vite dev server (default port **3000**)   |
-| `npm run build`   | Typecheck and production build → `dist/`        |
-| `npm run preview` | Serve the production build locally               |
-| `npm run lint`    | Run ESLint on the project                        |
-
-### Production build
-
-```bash
-npm run build
-npm run preview
-```
-
-Preview typically serves on [http://localhost:4173](http://localhost:4173). Set `VITE_API_URL` before `build` if the app must call an absolute API URL in production.
+| Command           | Description |
+|-------------------|-------------|
+| `npm run dev`     | Dev server on port **5173** |
+| `npm run build`   | Typecheck + production build |
+| `npm run preview` | Preview production build |
+| `npm run lint`    | ESLint |
 
 ## Backend API contract
 
-The frontend expects a JSON API with these endpoints (Bearer token on protected routes):
-
-| Method | Path               | Auth     | Body / response |
-|--------|--------------------|----------|-----------------|
-| `POST` | `/auth/register`   | No       | `{ email, password, tenantId }` → `AuthPayload` |
-| `POST` | `/auth/login`      | No       | `{ email, password, tenantId }` → `AuthPayload` |
-| `GET`  | `/api/forms`       | Bearer   | → `FormEntry[]` |
-| `POST` | `/api/forms`       | Bearer   | `{ first_name, last_name, location, selection_value }` → `FormEntry` |
-
-**AuthPayload**
+Base path: `/api/v1`. All responses use an envelope; the client unwraps `data`:
 
 ```json
 {
-  "token": "string",
-  "email": "string",
-  "tenantId": "string",
-  "tenantName": "string"
+  "status_code": 200,
+  "status": "Success",
+  "message": "...",
+  "data": { },
+  "time": "...",
+  "request": { "method": "GET", "path": "/api/v1/reports" }
 }
 ```
 
-Errors should return JSON with a `message` field; the client surfaces that to the user.
+Errors return `message` in the envelope (`status`: `"Failed"` or `"Error"`).
+
+Protected routes: `Authorization: Bearer <access_token>`.
+
+### Auth
+
+| Method | Path | Auth | Body |
+|--------|------|------|------|
+| `POST` | `/auth/register` | No | `{ email, tenant_slug, password, confirm_password }` |
+| `POST` | `/auth/login` | No | `{ email, password }` |
+
+Register does **not** return a token — the frontend logs in after successful registration.
+
+Login `data`:
+
+```json
+{
+  "user": { "id", "email", "tenant_id", "role" },
+  "tokens": { "access_token", "refresh_token" }
+}
+```
+
+### Tenants
+
+| Method | Path | Auth |
+|--------|------|------|
+| `GET` | `/tenants/:slug` | Public |
+| `GET` | `/tenants` | Admin |
+| `POST` | `/tenants` | Admin |
+
+### Reports
+
+| Method | Path | Auth | Body |
+|--------|------|------|------|
+| `POST` | `/reports` | Bearer | `{ first_name, last_name, location }` |
+| `PATCH` | `/reports/:id/step-2` | Bearer | `{ intervention_type }` |
+| `GET` | `/reports` | Bearer | — |
+| `GET` | `/reports/:id` | Bearer | — |
+
+`intervention_type`: `medical` | `fire` | `traffic` | `structural` | `other`
+
+### Users
+
+| Method | Path | Auth |
+|--------|------|------|
+| `GET` | `/users/current-user` | Bearer |
+| `DELETE` | `/users/account` | Bearer |
 
 ## Project structure
 
 ```
 src/
-├── api/api.ts           # Fetch wrapper and API functions
-├── components/
-│   └── MultiStepForm.tsx
+├── api/api.ts              # Fetch client, envelope unwrap, all endpoints
+├── components/MultiStepForm.tsx
 ├── context/
-│   ├── auth-context.ts  # React context definition
-│   ├── AuthContext.tsx  # AuthProvider component
-│   └── useAuth.ts       # useAuth hook
+│   ├── auth-context.ts
+│   ├── AuthContext.tsx
+│   └── useAuth.ts
 ├── pages/
-│   ├── AuthPage.tsx     # Login / register
+│   ├── AuthPage.tsx
 │   └── DashboardPage.tsx
-├── types/index.ts       # Shared types and constants
-├── App.tsx              # Auth gate and routing
-├── main.tsx
-└── vite-env.d.ts        # Vite client types for import.meta.env
+├── types/index.ts
+└── vite-env.d.ts
 ```
 
 ## Tech stack
 
-- React 19
-- TypeScript
-- Vite 8
-- ESLint (React Hooks, TypeScript ESLint, React Refresh)
+- React 19, TypeScript, Vite 8
+- Backend: NestJS (`accident-scene-api`)
 
 ## Troubleshooting
 
-| Issue | What to check |
-|-------|----------------|
-| Network errors on login/forms | Backend running on port 4000; proxy in `vite.config.ts` matches your API port |
-| `import.meta.env` TypeScript errors | `src/vite-env.d.ts` is present with `/// <reference types="vite/client" />` |
-| Env changes not applied | Restart `npm run dev` after editing `.env` |
-| CORS in production | Set `VITE_API_URL` to your API origin; ensure the API allows your frontend origin |
-
+| Issue | Check |
+|-------|-------|
+| Network errors | Backend on port 3000; `vite.config.ts` proxy `/api` → `3000` |
+| Registration 404 | Tenant slug exists (seed: `default`) |
+| Login 400 | Valid credentials; password rules (6–20 chars, upper+lower+digit/special) |
+| CORS in production | Set `VITE_API_URL`; configure backend CORS |

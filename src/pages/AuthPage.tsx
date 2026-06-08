@@ -1,40 +1,81 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
-import { login as apiLogin, register as apiRegister } from "../api/api";
+import { useState, useEffect, type ChangeEvent, type FormEvent } from "react";
+import { login as apiLogin, register as apiRegister, getTenantBySlug } from "../api/api";
 import { useAuth } from "../context/useAuth";
-import { TENANTS } from "../types";
-import type { LoginRequest } from "../types";
+import { DEFAULT_TENANT_SLUG } from "../types";
+import type { LoginRequest, RegisterRequest } from "../types";
 import "./AuthPage.css";
 
 type AuthMode = "login" | "register";
 
-type FormState = LoginRequest;
+type LoginFormState = LoginRequest;
+type RegisterFormState = RegisterRequest;
 
-const INITIAL_FORM: FormState = {
+const INITIAL_LOGIN: LoginFormState = {
   email: "",
   password: "",
-  tenantId: TENANTS[0].id,
+};
+
+const INITIAL_REGISTER: RegisterFormState = {
+  email: "",
+  password: "",
+  confirm_password: "",
+  tenant_slug: DEFAULT_TENANT_SLUG,
 };
 
 export default function AuthPage() {
   const { login } = useAuth();
   const [mode, setMode] = useState<AuthMode>("login");
-  const [form, setForm] = useState<FormState>(INITIAL_FORM);
+  const [loginForm, setLoginForm] = useState<LoginFormState>(INITIAL_LOGIN);
+  const [registerForm, setRegisterForm] =
+    useState<RegisterFormState>(INITIAL_REGISTER);
+  const [tenantName, setTenantName] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
 
-  const set =
-    (key: keyof FormState) =>
-    (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-      setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  useEffect(() => {
+    if (mode !== "register") return;
+    let cancelled = false;
+    getTenantBySlug(registerForm.tenant_slug)
+      .then((tenant) => {
+        if (!cancelled) setTenantName(tenant.name);
+      })
+      .catch(() => {
+        if (!cancelled) setTenantName("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, registerForm.tenant_slug]);
+
+  const setLogin =
+    (key: keyof LoginFormState) =>
+    (e: ChangeEvent<HTMLInputElement>) =>
+      setLoginForm((prev) => ({ ...prev, [key]: e.target.value }));
+
+  const setRegister =
+    (key: keyof RegisterFormState) =>
+    (e: ChangeEvent<HTMLInputElement>) =>
+      setRegisterForm((prev) => ({ ...prev, [key]: e.target.value }));
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const data =
-        mode === "login" ? await apiLogin(form) : await apiRegister(form);
-      login(data);
+      if (mode === "login") {
+        const data = await apiLogin(loginForm);
+        login(data);
+      } else {
+        await apiRegister(registerForm);
+        const data = await apiLogin(
+          {
+            email: registerForm.email,
+            password: registerForm.password,
+          },
+          tenantName || undefined,
+        );
+        login(data);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -65,20 +106,23 @@ export default function AuthPage() {
         </p>
 
         <form className="auth-form" onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="tenant">Workspace</label>
-            <select
-              id="tenant"
-              value={form.tenantId}
-              onChange={set("tenantId")}
-            >
-              {TENANTS.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          {mode === "register" && (
+            <div className="field">
+              <label htmlFor="tenant_slug">Workspace slug</label>
+              <input
+                id="tenant_slug"
+                type="text"
+                required
+                placeholder="default"
+                pattern="^[a-z0-9]+(?:-[a-z0-9]+)*$"
+                value={registerForm.tenant_slug}
+                onChange={setRegister("tenant_slug")}
+              />
+              {tenantName && (
+                <p className="auth-hint">Workspace: {tenantName}</p>
+              )}
+            </div>
+          )}
 
           <div className="field">
             <label htmlFor="email">Email</label>
@@ -87,8 +131,10 @@ export default function AuthPage() {
               type="email"
               required
               placeholder="you@example.com"
-              value={form.email}
-              onChange={set("email")}
+              value={mode === "login" ? loginForm.email : registerForm.email}
+              onChange={
+                mode === "login" ? setLogin("email") : setRegister("email")
+              }
             />
           </div>
 
@@ -98,20 +144,46 @@ export default function AuthPage() {
               id="password"
               type="password"
               required
+              minLength={6}
+              maxLength={20}
               placeholder="••••••••"
-              value={form.password}
-              onChange={set("password")}
+              value={
+                mode === "login" ? loginForm.password : registerForm.password
+              }
+              onChange={
+                mode === "login" ? setLogin("password") : setRegister("password")
+              }
             />
           </div>
 
-          {error && <p className="auth-error" role="alert">{error}</p>}
+          {mode === "register" && (
+            <div className="field">
+              <label htmlFor="confirm_password">Confirm password</label>
+              <input
+                id="confirm_password"
+                type="password"
+                required
+                minLength={6}
+                maxLength={20}
+                placeholder="••••••••"
+                value={registerForm.confirm_password}
+                onChange={setRegister("confirm_password")}
+              />
+            </div>
+          )}
+
+          {error && (
+            <p className="auth-error" role="alert">
+              {error}
+            </p>
+          )}
 
           <button className="auth-btn" type="submit" disabled={loading}>
             {loading
               ? "Loading…"
               : mode === "login"
-              ? "Sign in"
-              : "Create account"}
+                ? "Sign in"
+                : "Create account"}
           </button>
         </form>
 
